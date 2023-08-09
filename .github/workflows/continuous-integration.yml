@@ -1,0 +1,96 @@
+# Run continuous integration
+name: Continuous Integration on Main Branch
+
+# Run this workflow every time a new commit pushed to your repository
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "pom.xml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "pom.xml"
+
+jobs:
+  # Set the job key. The key is displayed as the job name
+  # when a job name is not provided
+  quarkus-ci:
+    # Name the Job
+    name: Build, Docker and Publish
+    # Set the type of machine to run on
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checks out a copy of your repository on the ubuntu-latest machine
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Set up JDK 18
+      - name: Set up JDK 18
+        uses: actions/setup-java@v3
+        with:
+          distribution: "temurin"
+          java-version: 18
+          cache: "maven"
+
+      # Compile
+      - name: Compile with Maven
+        run: mvn --batch-mode --update-snapshots compile
+
+      # Set up QEMU
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: "Start up Postgres for testing"
+        run: docker compose -f docker-compose.yml up -d
+
+      - name: "Check Postgres is up and running"
+        run: nc -z -v localhost 5432
+
+      # Test
+      - name: Test with Maven
+        run: mvn --batch-mode --update-snapshots test -Dquarkus.profile=test
+        # continue-on-error: true # Use to continue on error when tests fail
+
+      - name: "Stop Postgres"
+        run: docker compose -f docker-compose.yml down
+
+      # Build
+      - name: Build with Maven
+        run: mvn --batch-mode --update-snapshots verify -DskipTests
+
+      # Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # Login to DockerHub
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Get current time
+      - name: Get current time
+        uses: 1466587594/get-current-time@v2
+        id: current-time
+        with:
+          format: YYYYMMDD-HHMMSS
+          utcOffset: "+01:00"
+
+      # Build and push a JVM image
+      - name: Build and push JVM image
+        id: docker_build_on_main
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./src/main/docker/Dockerfile.jvm
+          push: true
+          tags: |
+            franvallano/security-backend:main-${{ steps.current-time.outputs.formattedTime }}
+        if: ${{ (github.ref == 'refs/heads/main') }}
